@@ -63,10 +63,10 @@
 "type" {adjust(); return Parser::TYPE;}
 
 /* Identifier */
-  [a-zA-Z][a-zA-Z0-9_]* {adjust(); string_buf_ = matched(); return Parser::ID;}
+  [a-zA-Z][a-zA-Z0-9_]* {adjust(); return Parser::ID;}
 
-/* Integr */
-  [0-9]+ {adjust(); string_buf_ = matched(); return Parser::INT;}
+/* Integer */
+  [0-9]+ {adjust(); return Parser::INT;}
 
 /* String  */
 \" {adjust(); begin(StartCondition__::STR); string_buf_.clear();}
