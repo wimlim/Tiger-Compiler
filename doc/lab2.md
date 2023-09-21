@@ -8,3 +8,4 @@
 将所有合法匹配放在前面，如果前面不存在匹配内容，则遇到任何内容都发出错误消息。
 . {adjust(); errormsg_->Error(errormsg_->tok_pos_, "illegal token");}
 # end-of-line handling
+一般情况下通过<code>\n {adjust(); errormsg_->Newline();}<code>处理换行，string和comment中也对\n有专门规则处理。
