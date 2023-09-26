@@ -73,13 +73,13 @@
 
 <STR>{
   \" {adjustStr(); begin(StartCondition__::INITIAL); setMatched(string_buf_); return Parser::STRING;}
+  \\[[:digit:]]{3} {adjustStr(); string_buf_ += (char)atoi(matched().c_str() + 1);}
+  \\\^[A-Z] {adjustStr(); string_buf_ += matched()[2] - 'A' + 1;}
+  \\[ \n\t\f]+\\ {adjustStr();}
   \\\" {adjustStr(); string_buf_ += '\"';}
   \\\\ {adjustStr(); string_buf_ += '\\';}
   \\n {adjustStr(); string_buf_ += '\n';}
   \\t {adjustStr(); string_buf_ += '\t';}
-  \\[[:digit:]]{3} {adjustStr(); string_buf_ += (char)atoi(matched().c_str() + 1);}
-  \\[ \n\t\f]+\\ {adjustStr();}
-  \\\^[A-Z] {adjustStr(); string_buf_ += matched()[2] - 'A' + 1;}
   . {adjustStr(); string_buf_ += matched();}
 }
 
@@ -88,8 +88,8 @@
 
 <COMMENT> {
   "*/" {adjust(); if (comment_level_) comment_level_--; else begin(StartCondition__::INITIAL);}
-  .|\n {adjust();}
   "/*" {adjust(); comment_level_++;}
+  .|\n {adjust();}
 }
 
  /* illegal input */
