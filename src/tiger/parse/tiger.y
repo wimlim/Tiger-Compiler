@@ -98,6 +98,7 @@ exp: lvalue               {$$ = new absyn::VarExp(scanner_.GetTokPos)(), $1);}
   |  ID LPAREN actuals RPAREN {$$ = new absyn::CallExp(scanner.GetTokPos(), $1, $3);}
   |  ID LBRACE rec RBRACE {$$ = new absyn::RecordExp(scanner_.GetTokPos(), $1, $3);}
   |  ID LBRACK exp RBRACK {$$ = new absyn::SubscriptVar(scanner_.GetTokPos(), new absyn::SimpleVar(scanner_.GetTokPos(), $1), $3);}
+  ;
 
 lvalue:  ID  {$$ = new absyn::SimpleVar(scanner_.GetTokPos(), $1);}
   |   oneormore   {$$ = $1;}
@@ -105,10 +106,12 @@ lvalue:  ID  {$$ = new absyn::SimpleVar(scanner_.GetTokPos(), $1);}
 
 one: ID DOT ID {$$ = new absyn::FieldVar(scanner_.GetTokPos(), new absyn::SimpleVar(scanner_.GetTokPos(), $1), $3);)}
   |  ID LBRACK exp RBRACK {$$ = new absyn::SubscriptVar(scanner_.GetTokPos(), new absyn::SimpleVar(scanner_.GetTokPos(), $1), $3);}
+  ;
 
 oneormore: one {$$ = $1;}
   |   oneormore DOT ID {$$ = new absyn::FieldVar(scanner_.GetTokPos(), $1, $3);}
   |   oneormore LBRACK exp RBRACK {$$ = new absyn::SubscriptVar(scanner_.GetTokPos(), $1, $3);}
+  ;
 
 expseq:       {$$ = new absysn::SeqEXp(scanner_.GetTokPos(), nullptr);}
   |   exp     {$$ = new absyn::SeqExp(scanner_.GetTokPos(), new basyn::ExpList($1));}
@@ -153,6 +156,7 @@ rec:  rec_one {$$ = new absyn::EFieldList($1);}
   ;
 
 rec_one: ID EQ exp {$$ = new absyn::EField(scanner_.GetTokPos(), $1, $3);}
+  ;
 
 rec_nonempty: rec_one {$$ = new absyn::EFieldList($1);}
   |   rec_one COMMA rec_nonempty {$$ = $3->Prepend($1);}
@@ -163,6 +167,7 @@ tydec: tydec_one {$$ = new absyn::NameAndTyList($1);}
   ;
 
 tydec_one: TYPE ID EQ ty {$$ = new absyn::TyDec(scanner_.GetTokPos(), $2, $4);}
+  ;
 
 
 ty:   ID {$$ = new absyn::NameTy(scanner_.GetTokPos(), $1);}
