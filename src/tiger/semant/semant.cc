@@ -87,7 +87,34 @@ type::Ty *StringExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 
 type::Ty *CallExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                               int labelcount, err::ErrorMsg *errormsg) const {
-  /* TODO: Put your lab4 code here */
+  if (func_ == nullptr) {
+    errormsg->Error(pos_, "func_ is null");
+  }
+  env::EnvEntry *entry = venv->Look(func_);
+  if (entry && typeid(*entry) == typeid(env::FunEntry)) {
+    env::FunEntry *fun_entry = static_cast<env::FunEntry *>(entry);
+    type::TyList *formal_tys = fun_entry->formals_;
+    const auto &field_list = args_->GetList();
+    const auto &ty_list = formal_tys->GetList();
+    if (field_list.size() < ty_list.size()) {
+      errormsg->Error(pos_, "too few params in function %s", func_->Name().c_str());
+    } else if (field_list.size() > ty_list.size()) {
+      errormsg->Error(pos_, "too many params in function %s", func_->Name().c_str());
+    }
+
+    auto it1 = field_list.begin();
+    auto it2 = ty_list.begin();
+    for (; it1 != field_list.end() && it2 != ty_list.end(); ++it1, ++it2) {
+      type::Ty *arg_ty = (*it1)->SemAnalyze(venv, tenv, labelcount, errormsg)->ActualTy();
+      if (!arg_ty->IsSameType(*it2)) {
+        errormsg->Error(pos_, "para type mismatch");
+      }
+    }
+    return fun_entry->result_;
+  } else {
+    errormsg->Error(pos_, "undefined function %s", func_->Name().c_str());
+    return type::VoidTy::Instance();
+  }
 }
 
 type::Ty *OpExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
@@ -184,11 +211,10 @@ type::Ty *AssignExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 
 type::Ty *IfExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                             int labelcount, err::ErrorMsg *errormsg) const {
-  printf("enter if\n");
   type::Ty *test_ty = test_->SemAnalyze(venv, tenv, labelcount, errormsg);
-  if (typeid(*test_ty) != typeid(type::IntTy)) {
-    errormsg->Error(pos_, "integer required");
-  }
+  // if (typeid(*test_ty) != typeid(type::IntTy)) {
+  //   errormsg->Error(pos_, "integer required");
+  // }
   type::Ty *then_ty = then_->SemAnalyze(venv, tenv, labelcount, errormsg);
   if (elsee_) {
     type::Ty *else_ty = elsee_->SemAnalyze(venv, tenv, labelcount, errormsg);
@@ -245,7 +271,7 @@ type::Ty *ForExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 type::Ty *BreakExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                                int labelcount, err::ErrorMsg *errormsg) const {
   if (labelcount == 0) {
-    errormsg->Error(pos_, "break statement not within loop");
+    errormsg->Error(pos_, "break is not inside any loop");
   }
   return type::VoidTy::Instance();
 }
@@ -301,7 +327,46 @@ type::Ty *VoidExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 
 void FunctionDec::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                              int labelcount, err::ErrorMsg *errormsg) const {
-  /* TODO: Put your lab4 code here */
+  const auto &list = functions_->GetList();
+  // first pass
+  for (auto &func : list) {
+    if (venv->Look(func->name_)) {
+      errormsg->Error(pos_, "two functions have the same name");
+    }
+    type::TyList *formal_tys = func->params_->MakeFormalTyList(tenv, errormsg);
+    if (func->result_) {
+      type::Ty *result_ty = tenv->Look(func->result_);
+      if (result_ty) {
+        venv->Enter(func->name_, new env::FunEntry(formal_tys, result_ty));
+      } else {
+        errormsg->Error(pos_, "undefined type %s", func->result_->Name().c_str());
+      }
+    } else {
+      venv->Enter(func->name_, new env::FunEntry(formal_tys, type::VoidTy::Instance()));
+    }
+  }
+  // second pass
+  for (auto &func : list) {
+    venv->BeginScope();
+    type::TyList *formal_tys = func->params_->MakeFormalTyList(tenv, errormsg);
+    const auto &fieldList = func->params_->GetList();
+    const auto &tyList = formal_tys->GetList();
+    auto it1 = fieldList.begin();
+    auto it2 = tyList.begin();
+    for (; it1 != fieldList.end() && it2 != tyList.end(); ++it1, ++it2) {
+      venv->Enter((*it1)->name_, new env::VarEntry(*it2));
+    }
+
+    type::Ty *result_ty = func->body_->SemAnalyze(venv, tenv, labelcount, errormsg);
+    env::EnvEntry *entry = venv->Look(func->name_);
+    if (entry && typeid(*entry) == typeid(env::FunEntry)) {
+      env::FunEntry *fun_entry = static_cast<env::FunEntry *>(entry);
+      if (!result_ty->IsSameType(fun_entry->result_)) {
+        errormsg->Error(pos_, "procedure returns value");
+      }
+    }
+    venv->EndScope();
+  }
 }
 
 void VarDec::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv, int labelcount,
