@@ -1,5 +1,38 @@
 #include "tiger/absyn/absyn.h"
 #include "tiger/semant/semant.h"
+namespace {
+  template <typename T, typename ProcessField>
+  static T* make_list(sym::Table<type::Ty>* tenv, absyn::FieldList* fields, err::ErrorMsg* errormsg, ProcessField process) {
+      if (fields == nullptr) return nullptr;
+
+      T* ans = new T();
+
+      const std::list<absyn::Field *> * field_list = &fields->GetList();
+      for (auto iter = field_list->begin(); iter != field_list->end(); iter++) {
+        type::Ty* ty = tenv->Look((*iter)->typ_);
+        
+        if (ty == nullptr) {
+          errormsg->Error((*iter)->pos_, "undefined type %s", (*iter)->typ_->Name().c_str());
+          continue;
+        }
+        
+        process(ans, *iter, ty);
+      }
+      return ans;
+  }
+
+  static type::TyList* make_formal_tylist(sym::Table<type::Ty>* tenv, absyn::FieldList* params, err::ErrorMsg *errormsg) {
+      return make_list<type::TyList>(tenv, params, errormsg, [](type::TyList* list, absyn::Field* field, type::Ty* ty) {
+          list->Append(ty->ActualTy());
+      });
+  }
+
+  static type::FieldList* make_fieldlist(sym::Table<type::Ty>* tenv, absyn::FieldList* fields, err::ErrorMsg* errormsg) {
+      return make_list<type::FieldList>(tenv, fields, errormsg, [](type::FieldList* list, absyn::Field* field, type::Ty* ty) {
+          list->Append(new type::Field(field->name_, ty));
+      });
+  }
+}
 
 namespace absyn {
 
