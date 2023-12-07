@@ -120,34 +120,43 @@ type::Ty *StringExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 
 type::Ty *CallExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                               int labelcount, err::ErrorMsg *errormsg) const {
-  if (func_ == nullptr) {
-    errormsg->Error(pos_, "func_ is null");
-  }
   env::EnvEntry *entry = venv->Look(func_);
-  if (entry && typeid(*entry) == typeid(env::FunEntry)) {
-    env::FunEntry *fun_entry = static_cast<env::FunEntry *>(entry);
-    type::TyList *formal_tys = fun_entry->formals_;
-    const auto &field_list = args_->GetList();
-    const auto &ty_list = formal_tys->GetList();
-    if (field_list.size() < ty_list.size()) {
-      errormsg->Error(pos_, "too few params in function %s", func_->Name().c_str());
-    } else if (field_list.size() > ty_list.size()) {
-      errormsg->Error(pos_, "too many params in function %s", func_->Name().c_str());
-    }
-
-    auto it1 = field_list.begin();
-    auto it2 = ty_list.begin();
-    for (; it1 != field_list.end() && it2 != ty_list.end(); ++it1, ++it2) {
-      type::Ty *arg_ty = (*it1)->SemAnalyze(venv, tenv, labelcount, errormsg)->ActualTy();
-      if (!arg_ty->IsSameType(*it2)) {
-        errormsg->Error(pos_, "para type mismatch");
-      }
-    }
-    return fun_entry->result_;
-  } else {
+  if (!entry || entry->kind_ != env::EnvEntry::Kind::FUN) {
     errormsg->Error(pos_, "undefined function %s", func_->Name().c_str());
-    return type::VoidTy::Instance();
-  }
+    return type::IntTy::Instance();
+  };
+
+  type::TyList *formals = ((env::FunEntry*) entry)->formals_;
+  const std::list<type::Ty *>* formallist = &formals->GetList();
+  const std::list<Exp *>* arglist = &args_->GetList();
+  
+  
+  int formal_size = formallist->size();
+  int arg_size = arglist->size();
+
+  int size = std::min(arg_size, formal_size);
+  auto formal_iter = formallist->begin();
+  auto arg_iter = arglist->begin();
+  while (size-- > 0) {
+    type::Ty* ty = (*arg_iter)->SemAnalyze(venv, tenv, labelcount, errormsg);
+    if (!ty->IsSameType(*formal_iter)) {
+      errormsg->Error(pos_, "para type mismatch");
+      return type::IntTy::Instance();
+    };
+    formal_iter++;
+    arg_iter++;
+  };
+
+  if (arg_size < formal_size) {
+    errormsg->Error(pos_, "too little params in function %s", func_->Name().c_str());
+    return type::IntTy::Instance();
+  };
+  if (arg_size > formal_size) {
+    errormsg->Error(pos_, "too many params in function %s", func_->Name().c_str());
+    return type::IntTy::Instance();
+  };
+
+  return ((env::FunEntry*) entry)->result_->ActualTy();
 }
 
 type::Ty *OpExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
@@ -155,63 +164,35 @@ type::Ty *OpExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
   type::Ty *left_ty = left_->SemAnalyze(venv, tenv, labelcount, errormsg);
   type::Ty *right_ty = right_->SemAnalyze(venv, tenv, labelcount, errormsg);
   switch (oper_) {
-    case absyn::PLUS_OP:
-    case absyn::MINUS_OP:
-    case absyn::TIMES_OP:
-    case absyn::DIVIDE_OP:
-      if (typeid(*left_ty) != typeid(type::IntTy)) {
-        errormsg->Error(left_->pos_, "integer required");
-      }
-      if (typeid(*right_ty) != typeid(type::IntTy)) {
-        errormsg->Error(right_->pos_, "integer required");
-      }
-      return type::IntTy::Instance();
+    case Oper::PLUS_OP: case Oper::MINUS_OP: case Oper::TIMES_OP: case Oper::DIVIDE_OP: case Oper::AND_OP: case Oper::OR_OP:
+    {
+      if (left_ty->kind_ != type::Ty::Kind::INT && left_ty->kind_ != type::Ty::Kind::NIL) errormsg->Error(left_->pos_, "integer required");
+      if (right_ty->kind_ != type::Ty::Kind::INT && right_ty->kind_ != type::Ty::Kind::NIL) errormsg->Error(right_->pos_, "integer required");
+      break;
+    }
+
+    case Oper::LT_OP: case Oper::LE_OP: case Oper::GT_OP: case Oper::GE_OP: case Oper::EQ_OP: case Oper::NEQ_OP:
+    {
+      if (!left_ty->IsSameType(right_ty) && left_ty->kind_ != type::Ty::Kind::VOID && right_ty->kind_ != type::Ty::Kind::NIL) {
+        errormsg->Error(this->pos_, "same type required");
+      };
+      break;
+    }
     default:
-      if (typeid(*left_ty) != typeid(*right_ty)) {
-        errormsg->Error(pos_, "same type required");
-      }
-      return type::VoidTy::Instance();
-  }
+      assert(0);
+  };
+  return type::IntTy::Instance();
 }
 
 type::Ty *RecordExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 int labelcount, err::ErrorMsg *errormsg) const {
-  type::Ty *ty = tenv->Look(typ_);
-  if (ty) {
-    ty = ty->ActualTy();
-    if (typeid(*ty) != typeid(type::RecordTy)) {
-      errormsg->Error(pos_, "not record type");
-      return ty;
-    } else {
-      type::RecordTy *record_ty = static_cast<type::RecordTy *>(ty);
-      const auto &field_list = record_ty->fields_->GetList();
-      const auto &exp_list = fields_->GetList();
+  type::Ty* ty = tenv->Look(typ_);
 
-      if (field_list.size() != exp_list.size()) {
-        errormsg->Error(pos_, "record type mismatch");
-        return ty;
-      }
-
-      for (auto &exp : exp_list) {
-        for (auto &field : field_list) {
-          if (field->name_->Name() == exp->name_->Name()) {
-            type::Ty *field_ty = field->ty_->ActualTy();
-            type::Ty *exp_ty = exp->exp_->SemAnalyze(venv, tenv, labelcount, errormsg)->ActualTy();
-            if (!field_ty->IsSameType(exp_ty)) {
-              errormsg->Error(pos_, "unmatched assign exp");
-            }
-            break;
-          }
-        }
-      }
-      return ty;
-    }
-
-  } else {
+  if (!ty) {
     errormsg->Error(pos_, "undefined type %s", typ_->Name().c_str());
-    return type::VoidTy::Instance();
-  }
-
+    return type::IntTy::Instance();
+  };
+  return ty;
 }
 
 type::Ty *SeqExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
@@ -245,9 +226,6 @@ type::Ty *AssignExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 type::Ty *IfExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                             int labelcount, err::ErrorMsg *errormsg) const {
   type::Ty *test_ty = test_->SemAnalyze(venv, tenv, labelcount, errormsg);
-  // if (typeid(*test_ty) != typeid(type::IntTy)) {
-  //   errormsg->Error(pos_, "integer required");
-  // }
   type::Ty *then_ty = then_->SemAnalyze(venv, tenv, labelcount, errormsg);
   if (elsee_) {
     type::Ty *else_ty = elsee_->SemAnalyze(venv, tenv, labelcount, errormsg);
@@ -265,16 +243,20 @@ type::Ty *IfExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 
 type::Ty *WhileExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                                int labelcount, err::ErrorMsg *errormsg) const {
-  type::Ty *test_ty = test_->SemAnalyze(venv, tenv, labelcount, errormsg);
-  if (typeid(*test_ty) != typeid(type::IntTy)) {
-    errormsg->Error(pos_, "integer required");
+  type::Ty* test_ty = test_->SemAnalyze(venv, tenv, labelcount, errormsg);
+  if (test_ty->kind_ != type::Ty::Kind::INT) {
+    errormsg->Error(test_->pos_, "integer required");
   }
-  if (body_) {
-    type::Ty *body_ty = body_->SemAnalyze(venv, tenv, labelcount + 1, errormsg);
-    if (typeid(*body_ty) != typeid(type::VoidTy)) {
-      errormsg->Error(pos_, "while body must produce no value");
-    }
-  }
+
+  venv->BeginLoop();
+  tenv->BeginLoop();
+
+  type::Ty* body_ty = body_->SemAnalyze(venv, tenv, labelcount, errormsg);
+  if (body_ty->kind_ != type::Ty::Kind::VOID)
+    errormsg->Error(body_->pos_, "while body must produce no value");
+  
+  venv->EndLoop();
+  tenv->EndLoop();
   return type::VoidTy::Instance();
 }
 
@@ -283,29 +265,28 @@ type::Ty *ForExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
   type::Ty *low_ty = lo_->SemAnalyze(venv, tenv, labelcount, errormsg);
   type::Ty *high_ty = hi_->SemAnalyze(venv, tenv, labelcount, errormsg);
 
-  if (typeid(*low_ty) != typeid(type::IntTy)) {
+  if (low_ty->kind_ != type::Ty::Kind::INT)
     errormsg->Error(lo_->pos_, "for exp's range type is not integer");
-  }
-  if (typeid(*high_ty) != typeid(type::IntTy)) {
+  if (high_ty->kind_ != type::Ty::Kind::INT)
     errormsg->Error(hi_->pos_, "for exp's range type is not integer");
-  }
-  if (body_) {
-    venv->BeginScope();
-    venv->Enter(var_, new env::VarEntry(type::IntTy::Instance(), true));
-    type::Ty *body_ty = body_->SemAnalyze(venv, tenv, labelcount + 1, errormsg);
-    if (typeid(*body_ty) != typeid(type::VoidTy)) {
-      errormsg->Error(pos_, "for body must produce no value");
-    }
-    venv->EndScope();
-  }
+
+  venv->BeginScope();
+  tenv->BeginScope();
+  venv->BeginLoop();
+  tenv->BeginLoop();
+
+  venv->Enter(var_, new env::VarEntry(type::IntTy::Instance(), true));
+  type::Ty* body_ty = body_->SemAnalyze(venv, tenv, labelcount, errormsg);
+
+  venv->EndScope();
+  tenv->EndScope();
+  venv->EndLoop();
+  tenv->EndLoop();
   return type::VoidTy::Instance();
 }
 
 type::Ty *BreakExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
                                int labelcount, err::ErrorMsg *errormsg) const {
-  if (labelcount == 0) {
-    errormsg->Error(pos_, "break is not inside any loop");
-  }
   return type::VoidTy::Instance();
 }
 
@@ -404,27 +385,20 @@ void FunctionDec::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
 
 void VarDec::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv, int labelcount,
                         err::ErrorMsg *errormsg) const {
-  if (venv->Look(var_)) {
-    errormsg->Error(pos_, "two variables have the same name");
-    return;
-  }
-  type::Ty *init_ty = init_->SemAnalyze(venv, tenv, labelcount, errormsg);
-  if (typ_) {
-    type::Ty *ty = tenv->Look(typ_);
-    if (ty) {
-      if (!ty->IsSameType(init_ty)) {
-        errormsg->Error(pos_, "type mismatch");
-      }
-      venv->Enter(var_, new env::VarEntry(ty));
-    } else {
+  if (typ_ == nullptr) {
+    type::Ty* ty = init_->SemAnalyze(venv, tenv, labelcount, errormsg);
+    if (ty->kind_ == type::Ty::NIL)
+      errormsg->Error(pos_, "init should not be nil without type specified");
+    venv->Enter(var_, new env::VarEntry(ty->ActualTy()));
+  } 
+  else {
+    type::Ty* ty = tenv->Look(typ_);
+    if (ty == nullptr) {
       errormsg->Error(pos_, "undefined type %s", typ_->Name().c_str());
     }
-  } else {
-    if (init_ty->IsSameType(type::NilTy::Instance()) && typeid(*init_ty) != typeid(type::RecordTy)) {
-      errormsg->Error(pos_, "init should not be nil without type specified");
-    } else {
-      venv->Enter(var_, new env::VarEntry(init_ty));
-    }
+    if (ty->IsSameType(init_->SemAnalyze(venv, tenv, labelcount, errormsg)))
+      venv->Enter(var_, new env::VarEntry(tenv->Look(typ_)));
+    else errormsg->Error(pos_, "type mismatch");
   }
 }
 
