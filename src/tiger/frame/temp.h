@@ -68,21 +68,19 @@ public:
   [[nodiscard]] Temp *NthTemp(int i) const;
   [[nodiscard]] const std::list<Temp *> &GetList() const { return temp_list_; }
 
+  [[nodiscard]] bool Contain(Temp* temp) {
+    return std::find(temp_list_.begin(), temp_list_.end(), temp) != temp_list_.end();
+  };
+  void Replace(Temp* old_temp, Temp* new_temp) {
+    for (auto iter = temp_list_.begin(); iter != temp_list_.end(); iter++)
+      if (*iter == old_temp) {
+        *iter = new_temp;
+      };
+  };
+
+
 private:
   std::list<Temp *> temp_list_;
-};
-
-class LabelList {
-public:
-  explicit LabelList(Label* t) : label_list_({t}) {};
-  LabelList(std::initializer_list<Label *> list) : label_list_(list) {};
-  LabelList() = default;
-  void Append(Label* t) { label_list_.push_back(t); };
-  [[nodiscard]] Label* NthLabel(int i) const;
-  [[nodiscard]] const std::list<Label*> &GetList() const { return label_list_; };
-
-private:
-  std::list<Label*> label_list_; 
 };
 
 } // namespace temp

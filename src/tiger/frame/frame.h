@@ -63,9 +63,25 @@ public:
 
   [[nodiscard]] virtual temp::Temp *ReturnValue() = 0;
 
-  [[nodiscard]] virtual temp::Temp* GetNthReg(int i) = 0;
-
   [[nodiscard]] virtual temp::Temp* GetNthArg(int i) = 0;
+  [[nodiscard]] virtual temp::Temp* RAX() = 0;
+  [[nodiscard]] virtual temp::Temp* RDI() = 0;
+  [[nodiscard]] virtual temp::Temp* RSI() = 0;
+  [[nodiscard]] virtual temp::Temp* RDX() = 0;
+  [[nodiscard]] virtual temp::Temp* RCX() = 0;
+  [[nodiscard]] virtual temp::Temp* R8() = 0;
+  [[nodiscard]] virtual temp::Temp* R9() = 0;
+  [[nodiscard]] virtual temp::Temp* R10() = 0;
+  [[nodiscard]] virtual temp::Temp* R11() = 0;
+  [[nodiscard]] virtual temp::Temp* RBX() = 0;
+  [[nodiscard]] virtual temp::Temp* RBP() = 0;
+  [[nodiscard]] virtual temp::Temp* R12() = 0;
+  [[nodiscard]] virtual temp::Temp* R13() = 0;
+  [[nodiscard]] virtual temp::Temp* R14() = 0;
+  [[nodiscard]] virtual temp::Temp* R15() = 0;
+  [[nodiscard]] virtual temp::Temp* RSP() = 0;
+  
+  [[nodiscard]] virtual std::vector<std::string> Colors() = 0;
 
   temp::Map *temp_map_;
 protected:
@@ -90,10 +106,12 @@ public:
 class AccessList {
 public:
   AccessList() = default;
+  AccessList(std::initializer_list<Access *> list) : access_list_(list) {}
 
-  void PushBack(Access* access) { access_list_.push_back(access); };
-
-  const std::list<Access *> &GetList() const { return access_list_; };
+  void Append(Access *flag) { access_list_.push_back(flag); }
+  void Insert(Access *flag) { access_list_.push_front(flag); }
+  std::list<Access *> &GetNonConstList() { return access_list_; }
+  const std::list<Access *> &GetList() { return access_list_; }
 
 private:
   std::list<Access *> access_list_;
@@ -105,10 +123,12 @@ public:
   AccessList* formals_;
   int s_offset_;
 
-  Frame(temp::Label* name, std::list<bool> escapes) : label_(name) {};
+  virtual Access *AllocLocal(bool escape) = 0;
 
-  virtual Access *allocLocal(bool escape) = 0;
-
+  virtual tree::Stm *ProcEntryExit1(tree::Stm *body) = 0;
+  virtual assem::InstrList *ProcEntryExit2(assem::InstrList *body) = 0;
+  virtual assem::Proc *ProcEntryExit3(assem::InstrList *body) = 0;
+  
   virtual ~Frame() = default;
 };
 
@@ -155,8 +175,7 @@ public:
   tree::Stm *body_;
   Frame *frame_;
 
-  ProcFrag(tree::Stm *body, Frame *frame) 
-      : Frag(PROC), body_(body), frame_(frame) {}
+  ProcFrag(tree::Stm *body, Frame *frame) : Frag(PROC), body_(body), frame_(frame) {}
 
   void OutputAssem(FILE *out, OutputPhase phase, bool need_ra) const override;
 };
@@ -171,10 +190,10 @@ private:
   std::list<Frag*> frags_;
 };
 
-tree::Exp* externalCall(std::string s, tree::ExpList* args);
-tree::Stm* procEntryExit1(Frame* frame, tree::Stm* stm);
-assem::InstrList* procEntryExit2(assem::InstrList* ilist);
-assem::Proc* procEntryExit3(Frame* frame, assem::InstrList* ilist);
+tree::Exp* ExternalCall(std::string s, tree::ExpList* args);
+// tree::Stm* ProcEntryExit1(Frame* frame, tree::Stm* stm);
+// assem::InstrList* ProcEntryExit2(assem::InstrList* ilist);
+// assem::Proc* ProcEntryExit3(Frame* frame, assem::InstrList* ilist);
 
 } // namespace frame
 

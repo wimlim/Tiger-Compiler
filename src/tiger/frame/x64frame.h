@@ -14,51 +14,52 @@ const uint32_t wordsize = 8;
 class X64RegManager : public RegManager {
 public:
   X64RegManager() : frame::RegManager() {
-    rax = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rax, new std::string("%rax"));
-    rdi = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rdi, new std::string("%rdi"));
-    rsi = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rsi, new std::string("%rsi"));
-    rdx = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rdx, new std::string("%rdx"));
-    rcx = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rcx, new std::string("%rcx"));
-    r8 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r8, new std::string("%r8"));
-    r9 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r9, new std::string("%r9"));
-    r10 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r10, new std::string("%r10"));
-    r11 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r11, new std::string("%r11"));
-    rbx = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rbx, new std::string("%rbx"));
-    rbp = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rbp, new std::string("%rbp"));
-    r12 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r12, new std::string("%r12"));
-    r13 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r13, new std::string("%r13"));
-    r14 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r14, new std::string("%r14"));
-    r15 = temp::TempFactory::NewTemp();
-    temp_map_->Enter(r15, new std::string("%r15"));
-    rsp = temp::TempFactory::NewTemp();
-    temp_map_->Enter(rsp, new std::string("%rsp"));
+    temp_map_->Enter(RAX(), new std::string("%rax"));
+    temp_map_->Enter(RDI(), new std::string("%rdi"));
+    temp_map_->Enter(RSI(), new std::string("%rsi"));
+    temp_map_->Enter(RDX(), new std::string("%rdx"));
+    temp_map_->Enter(RCX(), new std::string("%rcx"));
+    temp_map_->Enter(R8(), new std::string("%r8"));
+    temp_map_->Enter(R9(), new std::string("%r9"));
+    temp_map_->Enter(R10(), new std::string("%r10"));
+    temp_map_->Enter(R11(), new std::string("%r11"));
+    temp_map_->Enter(RBX(), new std::string("%rbx"));
+    temp_map_->Enter(RBP(), new std::string("%rbp"));
+    temp_map_->Enter(R12(), new std::string("%r12"));
+    temp_map_->Enter(R13(), new std::string("%r13"));
+    temp_map_->Enter(R14(), new std::string("%r14"));
+    temp_map_->Enter(R15(), new std::string("%r15"));
+    temp_map_->Enter(RSP(), new std::string("%rsp"));
   };
-
-  int WordSize();
-  temp::TempList* Registers();
-  temp::TempList* ArgRegs();
-  temp::TempList* CallerSaves();
-  temp::TempList* CalleeSaves();
-  temp::TempList* ReturnSink();
-  temp::Temp* FramePointer();
-  temp::Temp* StackPointer();
-  temp::Temp* ReturnValue();
-  temp::Temp* GetNthReg(int i);
+  temp::TempList* Registers() override;
+  temp::TempList* ArgRegs() override;
+  temp::TempList* CallerSaves() override;
+  temp::TempList* CalleeSaves() override;
+  temp::TempList* ReturnSink() override;
+  int WordSize() override;
+  temp::Temp* FramePointer() override;
+  temp::Temp* StackPointer() override;
+  temp::Temp* ReturnValue() override;
+  
   temp::Temp* GetNthArg(int i);
+  temp::Temp* RAX();
+  temp::Temp* RDI();
+  temp::Temp* RSI();
+  temp::Temp* RDX();
+  temp::Temp* RCX();
+  temp::Temp* R8();
+  temp::Temp* R9();
+  temp::Temp* R10();
+  temp::Temp* R11();
+  temp::Temp* RBX();
+  temp::Temp* RBP();
+  temp::Temp* R12();
+  temp::Temp* R13();
+  temp::Temp* R14();
+  temp::Temp* R15();
+  temp::Temp* RSP();
+  
+  std::vector<std::string> Colors() override;
 
 private:
   temp::Temp *rax, *rdi, *rsi, *rdx, *rcx, *r8, 
@@ -71,7 +72,9 @@ public:
   int offset;
 
   InFrameAccess(int offset) : Access(INFRAME), offset(offset) { assert(offset < 0); };
-  tree::Exp* ToExp(tree::Exp* framPtr) const { return tree::NewMemPlus_Const(framPtr, offset); };
+  tree::Exp* ToExp(tree::Exp* framPtr) const { 
+    return new tree::MemExp(new tree::BinopExp(tree::BinOp::PLUS_OP, framPtr, new tree::ConstExp(offset)));
+  };
 };
 
 class InRegAccess : public Access {
@@ -84,15 +87,22 @@ public:
 
 class X64Frame : public Frame {
 public:
-  X64Frame(temp::Label* name, std::list<bool> escapes) : Frame(name, escapes) {
-    this->s_offset_ = -8;
-    this->formals_ = new AccessList();
+  std::list<tree::Stm *> save_args;
 
-    for (auto ele : escapes) {
-      this->formals_->PushBack(allocLocal(ele));
+  X64Frame(temp::Label* name, std::list<bool> escapes);
+  Access* AllocLocal(bool escape) {
+    Access *tmp = nullptr;
+    if (escape) {
+      tmp = new InFrameAccess(s_offset_);
+      s_offset_ -= wordsize;
+    } else {
+      tmp = new InRegAccess(temp::TempFactory::NewTemp());
     }
+    return tmp;
   };
-  Access* allocLocal(bool escape) override;
+  tree::Stm *ProcEntryExit1(tree::Stm *body) override;
+  assem::InstrList *ProcEntryExit2(assem::InstrList *body) override;
+  assem::Proc *ProcEntryExit3(assem::InstrList *body) override;
 };
 
 } // namespace frame
