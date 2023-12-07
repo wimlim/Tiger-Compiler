@@ -1,8 +1,8 @@
 #include "tiger/translate/translate.h"
 
 #include <tiger/absyn/absyn.h>
-#include <vector>
-#include <set>
+#include <string>
+#include <string_view>
 
 #include "tiger/env/env.h"
 #include "tiger/errormsg/errormsg.h"
@@ -16,17 +16,17 @@ extern frame::RegManager *reg_manager;
 namespace tr {
 
 Access *Access::AllocLocal(Level *level, bool escape) {
-  return new Access(level, level->frame_->allocLocal(escape)); 
+  return new Access(level, ((frame::X64Frame *)(level->frame_))->AllocLocal(escape));
 }
 
 class Cx {
 public:
-  temp::LabelList* trues_;
-  temp::LabelList* falses_;
+  temp::Label **trues_;
+  temp::Label **falses_;
   tree::Stm *stm_;
 
-  Cx(temp::LabelList* trues, temp::LabelList* falses, tree::Stm* stm)
-  : trues_(trues), falses_(falses), stm_(stm) {}
+  Cx(temp::Label **trues, temp::Label **falses, tree::Stm *stm)
+      : trues_(trues), falses_(falses), stm_(stm) {}
 };
 
 class Exp {
@@ -65,10 +65,8 @@ public:
     return new tree::ExpStm(exp_);
   }
   [[nodiscard]] Cx UnCx(err::ErrorMsg *errormsg) const override {
-    tree::CjumpStm* stm = new tree::CjumpStm(tree::RelOp::NE_OP, exp_, new tree::ConstExp(0), NULL, NULL);
-    temp::LabelList* trues = new temp::LabelList(stm->true_label_);
-    temp::LabelList* falses = new temp::LabelList(stm->false_label_);
-    return Cx(trues, falses, stm);
+    auto cjs = new tree::CjumpStm(tree::NE_OP, exp_, new tree::ConstExp(0), nullptr, nullptr);
+    return Cx(&(cjs->true_label_), &(cjs->false_label_), cjs);
   }
 };
 
@@ -93,28 +91,27 @@ class CxExp : public Exp {
 public:
   Cx cx_;
 
-  CxExp(temp::LabelList* trues, temp::LabelList* falses, tree::Stm* stm)
-  : Exp(CX), cx_(trues, falses, stm) {}
+  CxExp(temp::Label** trues, temp::Label** falses, tree::Stm *stm)
+      : Exp(CX), cx_(trues, falses, stm) {}
   
   [[nodiscard]] tree::Exp *UnEx() const override {
-    temp::Temp* r = temp::TempFactory::NewTemp();
-    temp::Label* t = temp::LabelFactory::NewLabel(), *f = temp::LabelFactory::NewLabel();
-    auto true_list = cx_.trues_->GetList(), false_list = cx_.falses_->GetList();
-    for (auto iter = true_list.begin(); iter != true_list.end(); iter++) *iter = t;
-    for (auto iter = false_list.begin(); iter != false_list.end(); iter++) *iter = f;
+    auto r = temp::TempFactory::NewTemp();
+    auto t = temp::LabelFactory::NewLabel();
+    auto f = temp::LabelFactory::NewLabel();
+    *cx_.trues_ = t;
+    *cx_.falses_ = f;
 
     return new tree::EseqExp(new tree::MoveStm(new tree::TempExp(r), new tree::ConstExp(1)),
-      new tree::EseqExp(cx_.stm_, 
+      new tree::EseqExp(cx_.stm_,
       new tree::EseqExp(new tree::LabelStm(f),
       new tree::EseqExp(new tree::MoveStm(new tree::TempExp(r), new tree::ConstExp(0)),
       new tree::EseqExp(new tree::LabelStm(t), new tree::TempExp(r))))));
   }
   [[nodiscard]] tree::Stm *UnNx() const override {
-    temp::Label* label = temp::LabelFactory::NewLabel();
-    auto true_list = cx_.trues_->GetList(), false_list = cx_.falses_->GetList();
-    for (auto iter = true_list.begin(); iter != true_list.end(); iter++) *iter = label;
-    for (auto iter = false_list.begin(); iter != false_list.end(); iter++) *iter = label;
-    return new tree::SeqStm(cx_.stm_, new tree::LabelStm(label));
+    auto l = temp::LabelFactory::NewLabel();
+    *cx_.trues_ = l;
+    *cx_.falses_ = l;
+    return new tree::SeqStm(cx_.stm_, new tree::LabelStm(l));
   }
   [[nodiscard]] Cx UnCx(err::ErrorMsg *errormsg) const override { 
     return cx_;
@@ -122,21 +119,48 @@ public:
 };
 
 void ProgTr::Translate() {
-  absyn_tree_->Translate(venv_.get(), tenv_.get(), new tr::Level(new frame::X64Frame(temp::LabelFactory::NamedLabel("__tigermain__"), {}), nullptr), temp::LabelFactory::NamedLabel("__tigermain__"), errormsg_.get());
+  temp::Label* mainLabel = temp::LabelFactory::NamedLabel("tigermain"); /* The outermost proc frag name */
+
+  auto main_frame_ = new frame::X64Frame(mainLabel, {});
+  main_level_.reset(new Level(main_frame_, nullptr));
+  FillBaseTEnv();
+  FillBaseVEnv();
+
+  absyn_tree_->Translate(venv_.get(), 
+                        tenv_.get(), 
+                        main_level_.get(), 
+                        mainLabel, 
+                        errormsg_.get());
 }
 
 tree::Exp* StaticLink(tr::Level* target, tr::Level* level) {
-  tree::Exp* staticklink = new tree::TempExp(reg_manager->FramePointer());
+  tree::Exp* staticlink = new tree::TempExp(reg_manager->FramePointer());
   while (level != target) {
-    staticklink = level->frame_->formals_->GetList().front()->ToExp(staticklink);
+    staticlink = new tree::MemExp(new tree::BinopExp(tree::PLUS_OP, staticlink, new tree::ConstExp(reg_manager->WordSize())));
     level = level->parent_;
   }
-  return staticklink;
-};
+  return staticlink;
+}
 
 } // namespace tr
 
 namespace absyn {
+
+tree::ConstExp *GetConstExp(int i) {
+  return new tree::ConstExp(i);
+}
+
+tree::BinopExp *GetPlusExp(tree::Exp *left, tree::Exp *right) {
+  return new tree::BinopExp(tree::BinOp::PLUS_OP, left, right);
+}
+
+tree::BinopExp *GetMulExp(tree::Exp *left, tree::Exp *right) {
+  return new tree::BinopExp(tree::BinOp::MUL_OP, left, right);
+}
+
+tree::MemExp *GetMemExp(tree::Exp *left, int word_count) {
+  return new tree::MemExp(GetPlusExp(left, GetConstExp(word_count * reg_manager->WordSize())));
+}
 
 tr::ExpAndTy *AbsynTree::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                    tr::Level *level, temp::Label *label,
@@ -144,33 +168,16 @@ tr::ExpAndTy *AbsynTree::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
   return root_->Translate(venv, tenv, level, label, errormsg);
 }
 
-tr::Exp* TranslateSimpleVar(tr::Access* access, tr::Level* level) {
-  tree::Exp* staticlink = tr::StaticLink(access->level_, level);
-  staticlink = access->access_->ToExp(staticlink);
-
-  return new tr::ExExp(staticlink);
-}
 
 tr::ExpAndTy *SimpleVar::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                    tr::Level *level, temp::Label *label,
                                    err::ErrorMsg *errormsg) const {
-  tr::Exp* exp = nullptr;
-  type::Ty* ty = type::IntTy::Instance();
+  auto ent = (env::VarEntry *)venv->Look(sym_);
 
-  env::EnvEntry* entry = venv->Look(sym_);
-  if (!entry || entry->kind_ != env::EnvEntry::VAR) {
-    return new tr::ExpAndTy(nullptr, type::IntTy::Instance());
-  }
-  
-  env::VarEntry* var_entry = dynamic_cast<env::VarEntry*>(entry);
-  if (!var_entry) {
-    return new tr::ExpAndTy(nullptr, type::IntTy::Instance());
-  }
+  tree::Exp *staticLink = tr::StaticLink(ent->access_->level_, level);
+  tr::Exp *exp = new tr::ExExp(ent->access_->access_->ToExp(staticLink));
 
-  exp = TranslateSimpleVar(var_entry->access_, level);
-  ty = var_entry->ty_->ActualTy();
-
-  return new tr::ExpAndTy(exp, ty);
+  return new tr::ExpAndTy(exp, ent->ty_->ActualTy());
 }
 
 tr::ExpAndTy *FieldVar::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
@@ -230,32 +237,29 @@ tr::ExpAndTy *SubscriptVar::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
 tr::ExpAndTy *VarExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  switch (var_->kind_) {
-    case Var::Kind::SIMPLE:
+  switch(var_->kind_) {
+    case Var::SIMPLE:
       return ((SimpleVar *)var_)->Translate(venv, tenv, level, label, errormsg);
-    case Var::Kind::FIELD:
+    case Var::FIELD:
       return ((FieldVar *)var_)->Translate(venv, tenv, level, label, errormsg);
-    case Var::Kind::SUBSCRIPT:
+    case Var::SUBSCRIPT:
       return ((SubscriptVar *)var_)->Translate(venv, tenv, level, label, errormsg);
     default:
-      assert(0);
+      break;
   }
-}
-
-tr::Exp* TranslateNilExp() {
-  return new tr::ExExp(new tree::ConstExp(0));
+  assert(false);
 }
 
 tr::ExpAndTy *NilExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  return new tr::ExpAndTy(TranslateNilExp(), type::NilTy::Instance());
+  return new tr::ExpAndTy(new tr::ExExp(new tree::ConstExp(0)), type::NilTy::Instance());
 }
 
 tr::ExpAndTy *IntExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  return new tr::ExpAndTy(new tr::ExExp(new tree::ConstExp(1)), type::IntTy::Instance());
+  return new tr::ExpAndTy(new tr::ExExp(new tree::ConstExp(val_)), type::IntTy::Instance());
 }
 
 tr::ExpAndTy *StringExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
@@ -269,149 +273,98 @@ tr::ExpAndTy *StringExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
 tr::ExpAndTy *CallExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                  tr::Level *level, temp::Label *label,
                                  err::ErrorMsg *errormsg) const {
-  tr::Exp* exp = nullptr;
-  type::Ty* ty = type::VoidTy::Instance();
-  env::EnvEntry* entry = venv->Look(func_);
-  if (!entry || entry->kind_ != env::EnvEntry::Kind::FUN) {
-    return new tr::ExpAndTy(exp, ty);
-  }
-  
-  env::FunEntry* fun_entry = dynamic_cast<env::FunEntry*>(entry);
-  if (!fun_entry) {
-    return new tr::ExpAndTy(exp, ty);
+  auto *exp_list = new tree::ExpList();
+  auto fent = (env::FunEntry *)venv->Look(func_);
+
+  auto staticLink = tr::StaticLink(fent->level_->parent_, level);
+  exp_list->Append(staticLink);
+  for (auto it : args_->GetList()) {
+    tr::ExpAndTy *res = it->Translate(venv, tenv, level, label, errormsg);
+    exp_list->Append(res->exp_->UnEx());
   }
 
-  if (fun_entry->result_) {
-    ty = fun_entry->result_->ActualTy();
-  } else {
+  type::Ty *ty;
+  if (fent->result_ != nullptr) {
+    ty = fent->result_->ActualTy();
+  }
+  else {
     ty = type::VoidTy::Instance();
   }
 
-  auto formal_list = fun_entry->formals_->GetList();
-  auto arg_list = args_->GetList();
-
-  int formal_size = formal_list.size();
-  int arg_size = arg_list.size();
-  int size = std::min(formal_size, arg_size);
-  auto formal_iter = formal_list.begin();
-  auto arg_iter = arg_list.begin();
-
-  tree::ExpList* list = new tree::ExpList();
-  while (size-- > 0) {
-    tr::ExpAndTy* check_arg = (*arg_iter)->Translate(venv, tenv, level, label, errormsg);
-    if (!check_arg->ty_->IsSameType(*formal_iter)) {
-      return new tr::ExpAndTy(exp, ty);
-    }
-    formal_iter++;
-    arg_iter++;
-    list->Append(check_arg->exp_->UnEx());
+  tr::Exp *exp;
+  if (fent->level_->parent_ == nullptr) {
+    exp = new tr::ExExp(frame::ExternalCall(temp::LabelFactory::LabelString(func_), exp_list));
   }
-
-  if (arg_size < formal_size) {
-    return new tr::ExpAndTy(exp, ty);
+  else {
+    exp = new tr::ExExp(new tree::CallExp(new tree::NameExp(func_), exp_list));
   }
-
-  if (arg_size > formal_size) {
-    return new tr::ExpAndTy(exp, ty);
-  }
-
-  if (!fun_entry->level_->parent_) {
-    exp = new tr::ExExp(frame::externalCall(func_->Name(), list));
-  } else {
-    list->Append(tr::StaticLink(fun_entry->level_->parent_, level));
-    exp = new tr::ExExp(new tree::CallExp(new tree::NameExp(func_), list));
-  }
+  
   return new tr::ExpAndTy(exp, ty);
 }
 
 tr::ExpAndTy *OpExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                tr::Level *level, temp::Label *label,
                                err::ErrorMsg *errormsg) const {
-  tr::ExpAndTy* check_left = left_->Translate(venv, tenv, level, label, errormsg);
-  tr::ExpAndTy* check_right = right_->Translate(venv, tenv, level, label, errormsg);
-  tree::CjumpStm *stm = NULL;
-  tr::Exp* exp = NULL;
+  tr::ExpAndTy *lres = left_->Translate(venv, tenv, level, label, errormsg);
+  tr::ExpAndTy *rres = right_->Translate(venv, tenv, level, label, errormsg);
+
+  tree::CjumpStm *stm = nullptr;
+  tr::Exp *exp = nullptr;
+
   switch (oper_) {
-    case Oper::PLUS_OP: case Oper::MINUS_OP: case Oper::TIMES_OP: case Oper::DIVIDE_OP:
-    {
-      if (check_left->ty_->kind_ != type::Ty::Kind::INT) {
-        return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-      }
-      if (check_right->ty_->kind_ != type::Ty::Kind::INT) {
-        return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-      }
-      switch (oper_) {
-        case Oper::PLUS_OP:
-          exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::PLUS_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx()));
-          break;
-        case Oper::MINUS_OP:
-          exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::MINUS_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx()));
-          break;
-        case Oper::TIMES_OP:
-          exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::MUL_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx()));
-          break;
-        case Oper::DIVIDE_OP:
-          exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::DIV_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx()));
-          break;
-      }
+    case Oper::PLUS_OP:
+      exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::PLUS_OP, lres->exp_->UnEx(), rres->exp_->UnEx()));
       break;
-    }
-    case Oper::LT_OP: case Oper::LE_OP: case Oper::GT_OP: case Oper::GE_OP:
-    {
-      if (check_left->ty_->kind_ != type::Ty::Kind::INT && check_left->ty_->kind_ != type::Ty::Kind::STRING) {
-        return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-      }
-      if (check_right->ty_->kind_ != type::Ty::Kind::INT && check_right->ty_->kind_ != type::Ty::Kind::STRING) {
-        return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-      }
-      if (!check_left->ty_->IsSameType(check_right->ty_)) {
-        return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-      }
-      
-      tree::CjumpStm* stm;
-      switch (oper_) {
-        case Oper::LT_OP:
-          stm = new tree::CjumpStm(tree::RelOp::LT_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx(), NULL, NULL);
-          break;
-        case Oper::LE_OP:
-          stm = new tree::CjumpStm(tree::RelOp::LE_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx(), NULL, NULL);
-          break;
-        case Oper::GT_OP:
-          stm = new tree::CjumpStm(tree::RelOp::GT_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx(), NULL, NULL);
-          break;
-        case Oper::GE_OP:
-          stm = new tree::CjumpStm(tree::RelOp::GE_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx(), NULL, NULL);
-          break;                
-      }
-      temp::LabelList* trues = new temp::LabelList();
-      trues->Append(stm->true_label_);
-      temp::LabelList* falses = new temp::LabelList();
-      falses->Append(stm->false_label_);
-      exp = new tr::CxExp(trues, falses, stm);
+    case Oper::MINUS_OP:
+      exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::MINUS_OP, lres->exp_->UnEx(), rres->exp_->UnEx()));
       break;
-    }
-    case Oper::EQ_OP: case Oper::NEQ_OP:
-    {      
-      tree::CjumpStm* stm;
-      switch (oper_) {
-        case Oper::EQ_OP:
-          if (check_left->ty_->kind_ == type::Ty::STRING) {
-            stm = new tree::CjumpStm(tree::EQ_OP, frame::externalCall("stringEqual", new tree::ExpList({check_left->exp_->UnEx(), check_right->exp_->UnEx()})), new tree::ConstExp(1), NULL, NULL);
-          } else {
-            stm = new tree::CjumpStm(tree::RelOp::EQ_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx(), NULL, NULL);
-          }
-          break;
-        case Oper::NEQ_OP:
-          stm = new tree::CjumpStm(tree::RelOp::NE_OP, check_left->exp_->UnEx(), check_right->exp_->UnEx(), NULL, NULL);
-          break;
-      }
-      temp::LabelList* trues = new temp::LabelList();
-      trues->Append(stm->true_label_);
-      temp::LabelList* falses = new temp::LabelList();
-      falses->Append(stm->false_label_);
-      exp = new tr::CxExp(trues, falses, stm);
+    case Oper::TIMES_OP:
+      exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::MUL_OP, lres->exp_->UnEx(), rres->exp_->UnEx()));
       break;
-    }
+    case Oper::DIVIDE_OP:
+      exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::DIV_OP, lres->exp_->UnEx(), rres->exp_->UnEx()));
+      break;
+    case Oper::AND_OP:
+      exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::AND_OP, lres->exp_->UnEx(), rres->exp_->UnEx()));
+      break;
+    case Oper::OR_OP:
+      exp = new tr::ExExp(new tree::BinopExp(tree::BinOp::OR_OP, lres->exp_->UnEx(), rres->exp_->UnEx()));
+      break;
+    case Oper::LT_OP:
+      stm = new tree::CjumpStm(tree::RelOp::LT_OP, lres->exp_->UnEx(), rres->exp_->UnEx(), nullptr, nullptr);
+      exp = new tr::CxExp(&stm->true_label_, &stm->false_label_, stm);
+      break;
+    case Oper::LE_OP:
+      stm = new tree::CjumpStm(tree::RelOp::LE_OP, lres->exp_->UnEx(), rres->exp_->UnEx(), nullptr, nullptr);
+      exp = new tr::CxExp(&stm->true_label_, &stm->false_label_, stm);
+      break;
+    case Oper::GT_OP:
+      stm = new tree::CjumpStm(tree::RelOp::GT_OP, lres->exp_->UnEx(), rres->exp_->UnEx(), nullptr, nullptr);
+      exp = new tr::CxExp(&stm->true_label_, &stm->false_label_, stm);
+      break;
+    case Oper::GE_OP:
+      stm = new tree::CjumpStm(tree::RelOp::GE_OP, lres->exp_->UnEx(), rres->exp_->UnEx(), nullptr, nullptr);
+      exp = new tr::CxExp(&stm->true_label_, &stm->false_label_, stm);
+      break;
+    case Oper::EQ_OP:
+      if (lres->ty_->kind_ == type::Ty::STRING && rres->ty_->kind_ == type::Ty::STRING) {
+        auto expList = new tree::ExpList();
+        expList->Append(new tree::TempExp(reg_manager->FramePointer()));
+        expList->Append(lres->exp_->UnEx());
+        expList->Append(rres->exp_->UnEx());
+        stm = new tree::CjumpStm(tree::EQ_OP, frame::ExternalCall("string_equal", expList), GetConstExp(1), nullptr, nullptr);
+      }
+      else {
+        stm = new tree::CjumpStm(tree::EQ_OP, lres->exp_->UnEx(), rres->exp_->UnEx(), nullptr, nullptr);
+      }
+      exp = new tr::CxExp(&stm->true_label_, &stm->false_label_, stm);
+      break;
+
+    case Oper::NEQ_OP:
+      stm = new tree::CjumpStm(tree::NE_OP, lres->exp_->UnEx(), rres->exp_->UnEx(), nullptr, nullptr);
+      exp = new tr::CxExp(&stm->true_label_, &stm->false_label_, stm);
+      break;
+
     default:
       assert(0);
   }
@@ -422,392 +375,329 @@ tr::ExpAndTy *OpExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
 tr::ExpAndTy *RecordExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                    tr::Level *level, temp::Label *label,      
                                    err::ErrorMsg *errormsg) const {
-  type::Ty* ty = tenv->Look(typ_);
-  tr::ExExp* exp = nullptr;
-  tree::ExpList* list = new tree::ExpList();
-  tree::ExpList* tail = list;
+  type::Ty *ty = tenv->Look(typ_);
+  tr::ExExp *exp = nullptr;
+
+  auto expList = new tree::ExpList();
+  auto elist = fields_->GetList();
+
+  for (auto &it : elist) {
+    tr::ExpAndTy *res = it->exp_->Translate(venv, tenv, level, label, errormsg);
+    expList->Append(res->exp_->UnEx());
+  }
+
+  auto reg = temp::TempFactory::NewTemp();
+
+  auto arg = new tree::ExpList();
+  arg->Append(new tree::TempExp(reg_manager->FramePointer()));
+  arg->Append(GetConstExp(elist.size() * reg_manager->WordSize()));
+  tree::Stm *stm = new tree::MoveStm(new tree::TempExp(reg), frame::ExternalCall("alloc_record", arg));
   
-  if (!ty) {
-    return new tr::ExpAndTy(nullptr, type::IntTy::Instance());
+  int i = 0;
+  for (auto &it : expList->GetList()){
+    stm = new tree::SeqStm(stm, new tree::MoveStm(GetMemExp(new tree::TempExp(reg), i), it));
+    ++i;
   }
 
-  ty = ty->ActualTy();
-  if (ty->kind_ != type::Ty::Kind::RECORD) {
-    return new tr::ExpAndTy(nullptr, ty);
-  }
-
-  auto records = ((type::RecordTy*)ty)->fields_->GetList();
-  auto efields = fields_->GetList();
-  
-  int records_size = records.size();
-  int efields_size = efields.size();
-  int size = std::min(records_size, efields_size);
-  auto records_iter = records.begin();
-  auto efields_iter = efields.begin();
-
-  int count = 0;
-  while (size-- > 0) {
-    count++;
-    tr::ExpAndTy* check_exp = (*efields_iter)->exp_->Translate(venv, tenv, level, label, errormsg);
-
-    if (!check_exp->ty_->IsSameType((*records_iter)->ty_)) {
-      return new tr::ExpAndTy(nullptr, type::IntTy::Instance());
-    }
-
-    records_iter++;
-    efields_iter++;
-
-    tail->Append(check_exp->exp_->UnEx());
-  }
-
-  temp::Temp* reg = temp::TempFactory::NewTemp();
-
-  tree::Stm* stm = new tree::MoveStm(new tree::TempExp(reg), frame::externalCall("allocRecord", new tree::ExpList(new tree::ConstExp(count * frame::wordsize))));
-
-  count = 0;
-  
-  for (auto ele : list->GetList()) {
-    stm = new tree::SeqStm(stm, new tree::MoveStm(tree::NewMemPlus_Const(new tree::TempExp(reg), count * frame::wordsize), nullptr));
-    count++;
-  }
   exp = new tr::ExExp(new tree::EseqExp(stm, new tree::TempExp(reg)));
-
   return new tr::ExpAndTy(exp, ty);
-}
-
-
-tr::Exp *TranslateSeqExp(tr::Exp* left, tr::Exp* right) {
-  if (right) return new tr::ExExp(new tree::EseqExp(left->UnNx(), right->UnEx()));
-  else return  new tr::ExExp(new tree::EseqExp(left->UnNx(), new tree::ConstExp(0)));
 }
 
 tr::ExpAndTy *SeqExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  tr::Exp* exp = TranslateNilExp();
-  if (!seq_ && !seq_->GetList().size()) return new tr::ExpAndTy(NULL, type::VoidTy::Instance());
+  tr::Exp *exp = new tr::ExExp(new tree::ConstExp(0));
 
-  tr::ExpAndTy* check_exp = NULL;
-  for (auto ele : seq_->GetList()) {
-    check_exp = (*ele).Translate(venv, tenv, level, label, errormsg);
-    exp = TranslateSeqExp(exp, check_exp->exp_);
+  tr::ExpAndTy *res = nullptr;
+  for (auto &it : seq_->GetList()) {
+    res = it->Translate(venv, tenv, level, label, errormsg);
+    exp = new tr::ExExp(new tree::EseqExp(exp->UnNx(), res->exp_->UnEx()));
   }
-  return new tr::ExpAndTy(exp, check_exp->ty_);
-}
-
-static tr::Exp* TranslateAssignExp(tr::Exp* var, tr::Exp* exp) {
-  return new tr::NxExp(new tree::MoveStm(var->UnEx(), exp->UnEx()));
+  
+  return new tr::ExpAndTy(exp, res->ty_);
 }
 
 tr::ExpAndTy *AssignExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                    tr::Level *level, temp::Label *label,                       
                                    err::ErrorMsg *errormsg) const {
-  if (var_->kind_ == Var::Kind::SIMPLE) {
-    env::EnvEntry* entry = venv->Look(((SimpleVar *) var_)->sym_);
-    if (entry->readonly_) {
-      // error
-    }
-  }
+  auto vres = var_->Translate(venv, tenv, level, label, errormsg);
+  auto eres = exp_->Translate(venv, tenv, level, label, errormsg);
 
-  tr::ExpAndTy* check_var = var_->Translate(venv, tenv, level, label, errormsg);
-  tr::ExpAndTy* check_exp = exp_->Translate(venv, tenv, level, label, errormsg);
-  if (!check_var->ty_->IsSameType(check_exp->ty_)) {} //errormsg->Error(pos_, "unmatched assign exp");
-  tr::Exp* exp = TranslateAssignExp(check_var->exp_, check_exp->exp_);
+  tr::Exp *exp = new tr::NxExp(new tree::MoveStm(vres->exp_->UnEx(), eres->exp_->UnEx()));
   return new tr::ExpAndTy(exp, type::VoidTy::Instance());
 }
 
 tr::ExpAndTy *IfExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                tr::Level *level, temp::Label *label,
                                err::ErrorMsg *errormsg) const {
-  tr::ExpAndTy* check_test = test_->Translate(venv, tenv, level, label, errormsg);
-  tr::ExpAndTy* check_then = then_->Translate(venv, tenv, level, label, errormsg);
+  auto test_res = test_->Translate(venv, tenv, level, label, errormsg);
+  auto then_res = then_->Translate(venv, tenv, level, label, errormsg);
 
-  tr::Exp* exp;
-  if (elsee_) {
-    tr::ExpAndTy* check_elsee = elsee_->Translate(venv, tenv, level, label, errormsg);
-    if (check_then->ty_->IsSameType(check_elsee->ty_)) {
-      return new tr::ExpAndTy(NULL, type::VoidTy::Instance());
-    }
+  tr::Exp *exp;
+  if(elsee_ != nullptr){
+    auto else_res = elsee_->Translate(venv, tenv, level, label, errormsg);
+    
+    tr::Cx testc = test_res->exp_->UnCx(errormsg);
+    temp::Temp *r = temp::TempFactory::NewTemp();
+    temp::Label *trues = temp::LabelFactory::NewLabel();
+    temp::Label *falses = temp::LabelFactory::NewLabel();
+    temp::Label *flag = temp::LabelFactory::NewLabel();
+    *testc.trues_ = trues;
+    *testc.falses_ = falses;
 
-    tr::Cx testc = check_test->exp_->UnCx(errormsg);
-    temp::Temp* r = temp::TempFactory::NewTemp();
-    temp::Label* true_label = temp::LabelFactory::NewLabel();
-    temp::Label* false_label = temp::LabelFactory::NewLabel();
-    temp::Label* meeting = temp::LabelFactory::NewLabel();
+    auto arr = new std::vector<temp::Label *>();
+    arr->push_back(flag);
     
     exp = new tr::ExExp(new tree::EseqExp(testc.stm_,
-    new tree::EseqExp(new tree::LabelStm(true_label),
-    new tree::EseqExp(new tree::MoveStm(new tree::TempExp(r), check_then->exp_->UnEx()),
-    new tree::EseqExp(new tree::JumpStm(new tree::NameExp(meeting), new temp::LabelList(meeting)),
-    new tree::EseqExp(new tree::LabelStm(false_label),
-    new tree::EseqExp(new tree::MoveStm(new tree::TempExp(r), check_elsee->exp_->UnEx()),
-    new tree::EseqExp(new tree::LabelStm(meeting), new tree::TempExp(r)))))))));
-  } else {
-    if (check_then->ty_->kind_ != type::Ty::VOID) {
-      return new tr::ExpAndTy(NULL, type::VoidTy::Instance());
-    }
-
-    tr::Cx testc = check_test->exp_->UnCx(errormsg);
-    temp::Temp* r = temp::TempFactory::NewTemp();
-    temp::Label* true_label = temp::LabelFactory::NewLabel();
-    temp::Label* false_label = temp::LabelFactory::NewLabel();
-    temp::Label* meeting = temp::LabelFactory::NewLabel();
-
-    exp = new tr::NxExp(new tree::SeqStm(testc.stm_, new tree::SeqStm(new tree::LabelStm(true_label), new tree::SeqStm(check_then->exp_->UnNx(), new tree::LabelStm(false_label)))));
+      new tree::EseqExp(new tree::LabelStm(trues), 
+        new tree::EseqExp(new tree::MoveStm(new tree::TempExp(r), then_res->exp_->UnEx()), 
+          new tree::EseqExp(new tree::JumpStm(new tree::NameExp(flag), arr), 
+            new tree::EseqExp(new tree::LabelStm(falses), 
+              new tree::EseqExp(new tree::MoveStm(new tree::TempExp(r), else_res->exp_->UnEx()), 
+                new tree::EseqExp(new tree::JumpStm(new tree::NameExp(flag), arr), 
+                  new tree::EseqExp(new tree::LabelStm(flag), new tree::TempExp(r))))))))));
   }
-  return new tr::ExpAndTy(exp, check_then->ty_);
+  else {
+    tr::Cx testc = test_res->exp_->UnCx(errormsg);
+    temp::Temp *r = temp::TempFactory::NewTemp();
+    temp::Label *trues = temp::LabelFactory::NewLabel();
+    temp::Label *falses = temp::LabelFactory::NewLabel();
+    temp::Label *flag = temp::LabelFactory::NewLabel();
+    *testc.trues_ = trues;
+    *testc.falses_ = falses;
+
+    exp = new tr::NxExp(
+      new tree::SeqStm(testc.stm_, 
+        new tree::SeqStm(new tree::LabelStm(trues), 
+          new tree::SeqStm(then_res->exp_->UnNx(), new tree::LabelStm(falses)))));
+  }
+
+  return new tr::ExpAndTy(exp, then_res->ty_);
 }
 
 tr::ExpAndTy *WhileExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                   tr::Level *level, temp::Label *label,            
                                   err::ErrorMsg *errormsg) const {
-  tr::Exp* exp = NULL;
-  type::Ty* ty = type::VoidTy::Instance();
+  temp::Label *dlabel = temp::LabelFactory::NewLabel();
+  tr::ExpAndTy *tres = test_->Translate(venv, tenv, level, label, errormsg);
+  tr::ExpAndTy *bres = body_->Translate(venv, tenv, level, dlabel, errormsg);
 
-  temp::Label* done_label = temp::LabelFactory::NewLabel();
-  tr::ExpAndTy* check_test = test_->Translate(venv, tenv, level, label, errormsg);
-  tr::ExpAndTy* check_body = body_->Translate(venv, tenv, level, done_label, errormsg);
-  if (check_body->ty_->kind_ != type::Ty::Kind::INT) {
-    return new tr::ExpAndTy(exp, ty);
-  }
-  if (check_body->ty_->kind_ != type::Ty::Kind::VOID) {
-    return new tr::ExpAndTy(exp, ty);
-  }
+  temp::Label *tlabel = temp::LabelFactory::NewLabel();
+  temp::Label *blabel = temp::LabelFactory::NewLabel();
+  tr::Cx cx = tres->exp_->UnCx(errormsg);
+  *cx.trues_ = blabel;
+  *cx.falses_ = dlabel;
 
-  temp::Label* test_label = temp::LabelFactory::NewLabel();
-  temp::Label* body_label = temp::LabelFactory::NewLabel();
-  tr::Cx condition = check_test->exp_->UnCx(errormsg);
+  auto arr = new std::vector<temp::Label *>();
+    arr->push_back(tlabel);
+  
+  tr::Exp *exp = new tr::NxExp(
+    new tree::SeqStm(new tree::LabelStm(tlabel), 
+      new tree::SeqStm(cx.stm_, 
+        new tree::SeqStm(new tree::LabelStm(blabel), 
+          new tree::SeqStm(bres->exp_->UnNx(), 
+            new tree::SeqStm(new tree::JumpStm(new tree::NameExp(tlabel), arr), 
+              new tree::LabelStm(dlabel)))))));
 
-  exp = new tr::NxExp(
-    new tree::SeqStm(new tree::LabelStm(test_label),
-    new tree::SeqStm(condition.stm_,
-    new tree::SeqStm(new tree::LabelStm(body_label),
-    new tree::SeqStm(check_body->exp_->UnNx(),
-    new tree::SeqStm(new tree::JumpStm(new tree::NameExp(test_label), new temp::LabelList(test_label)),
-    new tree::LabelStm(done_label)))))));
-
-  return new tr::ExpAndTy(exp, ty);
+  return new tr::ExpAndTy(exp, type::VoidTy::Instance());
 }
 
 tr::ExpAndTy *ForExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  tr::Exp* exp = NULL;
-  type::Ty* ty = type::VoidTy::Instance();
-
-  tr::ExpAndTy* check_lo = lo_->Translate(venv, tenv, level, label, errormsg);
-  tr::ExpAndTy* check_hi = hi_->Translate(venv, tenv, level, label, errormsg);
-  if (check_lo->ty_->kind_ != type::Ty::Kind::INT) {
-    return new tr::ExpAndTy(exp, ty);
-  }
-  if (check_hi->ty_->kind_ != type::Ty::Kind::INT) {
-    return new tr::ExpAndTy(exp, ty);
-  }
+  auto lres = this->lo_->Translate(venv, tenv, level, label, errormsg);
+  auto hres = this->hi_->Translate(venv, tenv, level, label, errormsg);
 
   venv->BeginScope();
-  venv->Enter(var_, new env::VarEntry(tr::Access::AllocLocal(level, escape_), check_lo->ty_));
+  env::VarEntry* loop_var_ent = new env::VarEntry(tr::Access::AllocLocal(level, false), type::IntTy::Instance(), true);
+  venv->Enter(var_, loop_var_ent);
+
+  tr::Exp* limit_var = new tr::ExExp(new tree::TempExp(temp::TempFactory::NewTemp()));
+  tr::Exp* loop_var =  new tr::ExExp(new tree::TempExp(((frame::InRegAccess*)loop_var_ent->access_->access_)->reg));
   
-  tr::ExpAndTy* check_body = body_->Translate(venv, tenv, level, label, errormsg);
-  if (check_body->ty_->kind_ != type::Ty::Kind::VOID) {
-    return new tr::ExpAndTy(exp, ty);
-  }
+  auto body_label = temp::LabelFactory::NewLabel();
+  auto inc_label = temp::LabelFactory::NewLabel();
+  auto done_label = temp::LabelFactory::NewLabel();
+
+  auto bres = body_->Translate(venv, tenv, level, done_label, errormsg);
+
+  tree::Stm* init_loop_var_stm = new tree::MoveStm(loop_var->UnEx(), lres->exp_->UnEx());
+  tree::Stm* init_limit_stm = new tree::MoveStm(limit_var->UnEx(), hres->exp_->UnEx());
+  
+  tree::Stm* first_test_stm = new tree::CjumpStm(tree::LT_OP, loop_var->UnEx(), limit_var->UnEx(), body_label, done_label);
+  tree::Stm* inc_loop_var_stm = new tree::MoveStm(loop_var->UnEx(), GetPlusExp(loop_var->UnEx(), GetConstExp(1)));
+  
+  auto labelList = new std::vector<temp::Label* >(); 
+  labelList->push_back(body_label);
+
+  tree::Stm* test_stm = new tree::SeqStm(
+    new tree::CjumpStm(tree::LT_OP, loop_var->UnEx(), limit_var->UnEx(), inc_label, done_label),
+      new tree::SeqStm(new tree::LabelStm(inc_label),
+        new tree::SeqStm(inc_loop_var_stm,
+          new tree::JumpStm(new tree::NameExp(body_label), labelList))));
+
+  tree::Stm* res = new tree::SeqStm(init_loop_var_stm,
+    new tree::SeqStm(init_limit_stm,
+      new tree::SeqStm(first_test_stm,
+        new tree::SeqStm(new tree::LabelStm(body_label),
+          new tree::SeqStm(bres->exp_->UnNx(),
+            new tree::SeqStm(test_stm,
+              new tree::LabelStm(done_label)))))));
   venv->EndScope();
 
-  absyn::DecList* declist = new absyn::DecList();
-  declist->Append(new absyn::VarDec(0, var_, sym::Symbol::UniqueSymbol("int"), lo_));
-  declist->Append(new absyn::VarDec(0, sym::Symbol::UniqueSymbol("__limit_var__"), sym::Symbol::UniqueSymbol("int"), hi_));
-  
-  absyn::ExpList* bodylist = new absyn::ExpList();
-  bodylist->Append(body_);
-  bodylist->Append(new absyn::IfExp(0, new absyn::OpExp(0, absyn::Oper::EQ_OP, new absyn::VarExp(0, new absyn::SimpleVar(0, var_)), new absyn::VarExp(0, new absyn::SimpleVar(0, sym::Symbol::UniqueSymbol("__limit_var__")))), new absyn::BreakExp(0), NULL));
-  
-  absyn::WhileExp* body = new absyn::WhileExp(0, new absyn::OpExp(0, absyn::Oper::LE_OP, new absyn::VarExp(0, new absyn::SimpleVar(0, var_)), new absyn::VarExp(0, new absyn::SimpleVar(0, sym::Symbol::UniqueSymbol("__limit_var__")))),
-                      new absyn::SeqExp(0, bodylist));
-
-  absyn::Exp* forexp_to_letexp = new absyn::LetExp(0, declist, body);
-  return forexp_to_letexp->Translate(venv, tenv, level, label, errormsg);
+  return new tr::ExpAndTy(new tr::NxExp(res), type::VoidTy::Instance());
 }
 
 tr::ExpAndTy *BreakExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                   tr::Level *level, temp::Label *label,
                                   err::ErrorMsg *errormsg) const {
-  tree::Stm* stm = new tree::JumpStm(new tree::NameExp(label), new temp::LabelList(label));
-  tr::Exp* nxexp = new tr::NxExp(stm);
-  return new tr::ExpAndTy(nxexp, type::VoidTy::Instance());
+  auto expList = new std::vector<temp::Label *>();
+  expList->push_back(label);
+
+  tree::Stm *stm = new tree::JumpStm(new tree::NameExp(label), expList); 
+  tr::Exp *exp = new tr::NxExp(stm);
+  return new tr::ExpAndTy(exp, type::VoidTy::Instance());
 }
 
 tr::ExpAndTy *LetExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  return nullptr;
+  static bool mainFunction = true;
+  bool passBool = false;
+  if (mainFunction) {
+    passBool = true;
+    mainFunction = false;
+  }
+
+  venv->BeginScope();
+  tenv->BeginScope();
+	tree::Stm *stm = nullptr;
+  for (auto it : decs_->GetList()) {
+    if (stm == nullptr) {
+      stm = it->Translate(venv, tenv, level, label, errormsg)->UnNx();
+    }
+    else {
+      stm = new tree::SeqStm(stm, it->Translate(venv, tenv, level, label, errormsg)->UnNx());
+    }
+  }
+  auto bres = body_->Translate(venv, tenv, level, label, errormsg);
+  venv->EndScope();
+  tenv->EndScope();
+
+  tree::Exp *res;
+
+  if(stm) {
+    res = new tree::EseqExp(stm, bres->exp_->UnEx());
+  }
+  else {
+    res = bres->exp_->UnEx();
+  }
+  stm = new tree::ExpStm(res);
+
+  if (passBool) {
+    frags->PushBack(new frame::ProcFrag(stm, level->frame_));
+  }
+
+  return new tr::ExpAndTy(new tr::ExExp(res), bres->ty_->ActualTy());
 }
 
 tr::ExpAndTy *ArrayExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                   tr::Level *level, temp::Label *label,                    
                                   err::ErrorMsg *errormsg) const {
-  type::Ty* ty = tenv->Look(typ_)->ActualTy();
-  if (!ty) {
-    return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-  }
-  if (ty->kind_ != type::Ty::ARRAY) {
-    return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-  }
+  type::Ty *ty = tenv->Look(typ_)->ActualTy();
 
-  tr::ExpAndTy* check_size = size_->Translate(venv, tenv, level, label, errormsg);
-  if (check_size->ty_->kind_ != type::Ty::INT) {
-    return new tr::ExpAndTy(NULL, type::IntTy::Instance());
-  }
+  auto sres = size_->Translate(venv, tenv, level, label, errormsg);
+  auto ires = init_->Translate(venv, tenv, level, label, errormsg);
 
-  tr::ExpAndTy* check_init = init_->Translate(venv, tenv, level, label, errormsg);
+  auto expList = new tree::ExpList();
+  expList->Append(new tree::TempExp(reg_manager->FramePointer()));
+  expList->Append(sres->exp_->UnEx());
+  expList->Append(ires->exp_->UnEx());
 
-  tr::Exp* exp = new tr::ExExp(frame::externalCall("initArray", new tree::ExpList({check_size->exp_->UnEx(), check_size->exp_->UnEx()})));
+  tr::Exp *exp = new tr::ExExp(frame::ExternalCall("init_array", expList));
   return new tr::ExpAndTy(exp, ty);
 }
 
 tr::ExpAndTy *VoidExp::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                  tr::Level *level, temp::Label *label,
                                  err::ErrorMsg *errormsg) const {
-  return new tr::ExpAndTy(NULL, type::VoidTy::Instance());
-}
-
-static type::TyList *make_formal_tylist(sym::Table<type::Ty> *tenv, absyn::FieldList* params, err::ErrorMsg* errormsg) {
-  if (params == NULL)
-    return NULL;
-  type::TyList* tylist = new type::TyList();
-  for (auto param : params->GetList()) {
-    type::Ty* ty = tenv->Look(param->typ_);
-    tylist->Append(ty->ActualTy());
-  }
-  return tylist;
-}
-
-static type::FieldList* make_fieldlist(sym::Table<type::Ty>* tenv, absyn::FieldList* fields, err::ErrorMsg* errormsg) {
-  if (fields == NULL) return NULL;
-  type::FieldList* fieldlist = new type::FieldList();
-  for (auto field : fields->GetList()) {
-    type::Ty* ty = tenv->Look(field->typ_);
-    fieldlist->Append(new type::Field(field->name_, ty));
-  }
-  return fieldlist;
-}
-
-static std::list<bool> make_formal_ecslist(absyn::FieldList* params, err::ErrorMsg* errormsg) {
-  std::list<bool> ecslist = std::list<bool>();
-  for (auto param : params->GetList()) 
-    ecslist.push_back(param->escape_);
-  return ecslist;
+  return new tr::ExpAndTy(nullptr, type::VoidTy::Instance());
 }
 
 tr::Exp *FunctionDec::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                                 tr::Level *level, temp::Label *label,
                                 err::ErrorMsg *errormsg) const {
-  sym::Table<int> *check_table = new sym::Table<int>();
+  for (auto &it : functions_->GetList()) {
+    std::list<bool> escapes;
+    type::TyList *tyList = new type::TyList();
+    for (auto &iter : it->params_->GetList()) {
+      escapes.push_back(iter->escape_);
+      type::Ty *ty = tenv->Look(iter->typ_);
+      tyList->Append(ty->ActualTy());
+    }
 
-  auto list = functions_->GetList();
-  for (auto ele : list) {
-    if (check_table->Look(ele->name_)) {
-      continue;
+    tr::Level *new_level = tr::Level::NewLevel(level, it->name_, escapes);
+
+    type::Ty *result;
+    if (it->result_) {
+      result = tenv->Look(it->result_);
     }
-    check_table->Enter(ele->name_, (int *) 1);
-    type::TyList* formaltys = make_formal_tylist(tenv, ele->params_, errormsg);
-    tr::Level* new_level = tr::Level::NewLevel(level, ele->name_, make_formal_ecslist(ele->params_, errormsg));
-    if (!ele->result_) {
-      venv->Enter(ele->name_, new env::FunEntry(new_level, ele->name_, formaltys, type::VoidTy::Instance()));
-      continue;
+    else {
+      result = type::VoidTy::Instance();
     }
-    type::Ty* result = tenv->Look(ele->result_);
-    if (!result) {
-      continue;
-    }
-    venv->Enter(ele->name_, new env::FunEntry(new_level, ele->name_, formaltys, result));
+    venv->Enter(it->name_, new env::FunEntry(new_level, it->name_, tyList, result));
   }
-  for (auto fundec : list) {
+
+  for (auto &it : functions_->GetList()) {
     venv->BeginScope();
-    env::FunEntry* funentry = (env::FunEntry *)venv->Look(fundec->name_);
-    auto formaltys = funentry->formals_->GetList();
-    auto formaltys_iter = formaltys.begin();
-    auto formalaccs = funentry->level_->frame_->formals_->GetList();
-    auto formalaccs_iter = formalaccs.begin();
 
-    for (auto field : fundec->params_->GetList()) {
-      venv->Enter(field->name_, new env::VarEntry(new tr::Access(funentry->level_, *formalaccs_iter), *formaltys_iter));
-      formaltys_iter++;
-      formalaccs_iter++;
-    }
-    
-    tr::ExpAndTy* entry = fundec->body_->Translate(venv, tenv, funentry->level_, funentry->label_, errormsg);
-    if (!entry->ty_->IsSameType(type::VoidTy::Instance()) && fundec->result_ == NULL) {
-      return new tr::ExExp(new tree::EseqExp(entry->exp_->UnNx(), new tree::ConstExp(0)));
-    }
-    if (fundec->result_ && entry->ty_->IsSameType(tenv->Look(fundec->result_)->ActualTy())) {
-      return new tr::ExExp(new tree::EseqExp(entry->exp_->UnNx(), new tree::ConstExp(0)));
-    }
+    auto ent = (env::FunEntry *)venv->Look(it->name_);
+    std::list<type::Ty *> formaltys = ent->formals_->GetList();
+    auto ty_it = formaltys.begin();
+
+    std::list<frame::Access *> formalaccs = ent->level_->frame_->formals_->GetList();
+    auto acc_it = formalaccs.begin();
+
+    for (auto& field : it->params_->GetList()) {
+      venv->Enter(field->name_, new env::VarEntry(new tr::Access(ent->level_, *acc_it), *ty_it));
+      ++ty_it;
+      ++acc_it;
+    };
+
+    auto res = it->body_->Translate(venv, tenv, ent->level_, ent->label_, errormsg);
     venv->EndScope();
-    
-    frags->PushBack(new frame::ProcFrag(frame::procEntryExit1(funentry->level_->frame_, new tree::MoveStm(new tree::TempExp(reg_manager->ReturnValue()), entry->exp_->UnEx())), funentry->level_->frame_));
-  }
 
-  return TranslateNilExp();
+    tree::MoveStm *stm = new tree::MoveStm(new tree::TempExp(reg_manager->ReturnValue()), res->exp_->UnEx());
+    tree::Stm* proc = ent->level_->frame_->ProcEntryExit1(stm);
+    frags->PushBack(new frame::ProcFrag(proc ,ent->level_->frame_));
+  }
+  return new tr::ExExp(new tree::ConstExp(0));
 }
 
 tr::Exp *VarDec::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                            tr::Level *level, temp::Label *label,
                            err::ErrorMsg *errormsg) const {
-  tr::ExpAndTy* check_init = init_->Translate(venv, tenv, level, label, errormsg);
-  tr::Access* access;
-  if (!typ_) {
-    if (check_init->ty_->ActualTy()->kind_ == type::Ty::NIL) {} //errormsg->Error(pos_, "init should not be nil without type specified");
-  } else {
-    type::Ty* ty = tenv->Look(typ_);
-    if (check_init->ty_->ActualTy()->kind_ == type::Ty::Kind::NIL && ty->ActualTy()->kind_ != type::Ty::Kind::RECORD) //errormsg->Error(pos_, "init should not be nil without type specified");
-    if (ty && ty->kind_ != check_init->ty_->ActualTy()->kind_) {} //errormsg->Error(pos_, "type mismatch");
-  }
-  access = tr::Access::AllocLocal(level, this->escape_);
-  venv->Enter(var_, new env::VarEntry(access, check_init->ty_->ActualTy()));
+  auto ires = init_->Translate(venv, tenv, level, label, errormsg);
 
-  return TranslateSimpleVar(access, level);
-  return TranslateAssignExp(TranslateSimpleVar(access, level), check_init->exp_);
+  tr::Access *access = tr::Access::AllocLocal(level, escape_);
+  venv->Enter(var_, new env::VarEntry(access, ires->ty_));
+
+  return new tr::NxExp(new tree::MoveStm(access->access_->ToExp(new tree::TempExp(reg_manager->FramePointer())), ires->exp_->UnEx()));
 }
 
 tr::Exp *TypeDec::Translate(env::VEnvPtr venv, env::TEnvPtr tenv,
                             tr::Level *level, temp::Label *label,
                             err::ErrorMsg *errormsg) const {
-  auto tylist = types_->GetList();
-  auto tylist_iter = tylist.begin();
-  while (tylist_iter != tylist.end()) {
-    auto tylist_next_iter = tylist_iter;
-    tylist_next_iter++;
-    while (tylist_next_iter != tylist.end()) {
-      if ((*tylist_iter)->name_ == (*tylist_next_iter)->name_)
-        tylist_next_iter++;
-    }
-    tenv->Enter((*tylist_iter)->name_, new type::NameTy((*tylist_iter)->name_, NULL));
-    tylist_iter++;
+  for (auto &it : types_->GetList()) {
+    tenv->Enter(it->name_, new type::NameTy(it->name_, nullptr));
   }
 
-  for (auto ele : tylist) {
-    type::NameTy* nameTy = (type::NameTy *)tenv->Look(ele->name_);
-    nameTy->ty_ = ele->ty_->Translate(tenv, errormsg);
+  for (auto &it : types_->GetList()) {
+    type::NameTy *nameTy = (type::NameTy *)tenv->Look(it->name_);
+    nameTy->ty_ = it->ty_->Translate(tenv, errormsg);
   }
-
-  bool hasCycle = false;
-  for (auto ele : tylist) {
-    type::Ty* ty = tenv->Look(ele->name_);
-    if (ty->kind_ == type::Ty::NAME) {
-      type::Ty* tyTy = ((type::NameTy *)ty)->ty_;
-      while (tyTy->kind_ == type::Ty::NAME) {
-        type::NameTy* nameTy = (type::NameTy *)tyTy;
-        if (nameTy->sym_->Name() == ele->name_->Name()) {
-          hasCycle = true;
-          break;
-        }
-        tyTy = nameTy->ty_;
-      }
-    }
-    if (hasCycle)
-      break;
-  }
-  return TranslateNilExp();
+  
+  return new tr::ExExp(new tree::ConstExp(0));
 }
 
 type::Ty *NameTy::Translate(env::TEnvPtr tenv, err::ErrorMsg *errormsg) const {
@@ -820,8 +710,14 @@ type::Ty *NameTy::Translate(env::TEnvPtr tenv, err::ErrorMsg *errormsg) const {
 
 type::Ty *RecordTy::Translate(env::TEnvPtr tenv,
                               err::ErrorMsg *errormsg) const {
-  type::FieldList* fields = make_fieldlist(tenv, record_, errormsg);
-  return new type::RecordTy(fields);
+  auto fieldList = new type::FieldList();
+
+  for (auto &it : record_->GetList()) {
+    type::Ty *ty = tenv->Look(it->typ_);
+    fieldList->Append(new type::Field(it->name_, ty));
+  }
+
+  return new type::RecordTy(fieldList);
 }
 
 type::Ty *ArrayTy::Translate(env::TEnvPtr tenv, err::ErrorMsg *errormsg) const {
