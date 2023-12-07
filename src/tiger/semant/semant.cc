@@ -201,6 +201,9 @@ type::Ty *SeqExp::SemAnalyze(env::VEnvPtr venv, env::TEnvPtr tenv,
   type::Ty *result = type::VoidTy::Instance();
   for (auto &exp : list) {
     result = exp->SemAnalyze(venv, tenv, labelcount, errormsg);
+    if (exp->kind_ == Exp::Kind::BREAK && !venv->inLoop()) {
+      errormsg->Error(pos_, "break is not inside any loop");
+    }
   }
   return result;
 }
