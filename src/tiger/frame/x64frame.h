@@ -9,7 +9,7 @@
 
 namespace frame {
 
-const uint32_t wordsize = 8;
+const int wordsize = 8;
 
 class X64RegManager : public RegManager {
 public:

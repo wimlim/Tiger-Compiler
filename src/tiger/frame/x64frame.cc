@@ -178,7 +178,7 @@ temp::Temp* X64RegManager::GetNthArg(int i) {
     case 4: return RCX();
     case 5: return R8();
     case 6: return R9();
-  };
+  }
   return NULL;
 }
 
