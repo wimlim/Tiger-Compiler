@@ -151,7 +151,7 @@ temp::Temp *BinopExp::Munch(assem::InstrList &instr_list, std::string_view fs) {
   temp::Label *label_false = temp::LabelFactory::NewLabel();
   temp::Label *label_end = temp::LabelFactory::NewLabel();
   switch (op_){
-    case PLUS_OP:
+    case PLUS_OP: case OR_OP:
       left = left_->Munch(instr_list, fs);
       right = right_->Munch(instr_list, fs);
       instr_list.Append(new assem::MoveInstr("movq `s0, `d0", new temp::TempList(new_reg), new temp::TempList(left)));
@@ -165,7 +165,7 @@ temp::Temp *BinopExp::Munch(assem::InstrList &instr_list, std::string_view fs) {
       instr_list.Append(new assem::OperInstr("subq `s0, `d0", new temp::TempList(new_reg), new temp::TempList(right), nullptr));
       break;
 
-    case MUL_OP:
+    case MUL_OP: case AND_OP:
       left = left_->Munch(instr_list, fs);
       right = right_->Munch(instr_list, fs);
       instr_list.Append(new assem::MoveInstr("movq `s0, `d0", new temp::TempList(reg_manager->RAX()), new temp::TempList(left)));
@@ -181,36 +181,36 @@ temp::Temp *BinopExp::Munch(assem::InstrList &instr_list, std::string_view fs) {
       instr_list.Append(new assem::OperInstr("idivq `s0", new temp::TempList({reg_manager->RAX(), reg_manager->RDX()}), new temp::TempList(right), nullptr));
       instr_list.Append(new assem::MoveInstr("movq `s0, `d0", new temp::TempList(new_reg), new temp::TempList(reg_manager->RAX())));
       break;
-    case AND_OP:
-      left = left_->Munch(instr_list, fs);
-      right = right_->Munch(instr_list, fs);
-      label_false = temp::LabelFactory::NewLabel();
-      label_end = temp::LabelFactory::NewLabel();
-      instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(left), nullptr));
-      instr_list.Append(new assem::OperInstr("je " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
-      instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(right), nullptr));
-      instr_list.Append(new assem::OperInstr("je " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
-      instr_list.Append(new assem::MoveInstr("movq $1, `d0", new temp::TempList(new_reg), nullptr));
-      instr_list.Append(new assem::OperInstr("jmp " + temp::LabelFactory::LabelString(label_end), nullptr, nullptr, nullptr));
-      instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_false), label_false));
-      instr_list.Append(new assem::MoveInstr("movq $0, `d0", new temp::TempList(new_reg), nullptr));
-      instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_end), label_end));
-      break;
-    case OR_OP:
-      left = left_->Munch(instr_list, fs);
-      right = right_->Munch(instr_list, fs);
-      label_false = temp::LabelFactory::NewLabel();
-      label_end = temp::LabelFactory::NewLabel();
-      instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(left), nullptr));
-      instr_list.Append(new assem::OperInstr("jne " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
-      instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(right), nullptr));
-      instr_list.Append(new assem::OperInstr("jne " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
-      instr_list.Append(new assem::MoveInstr("movq $0, `d0", new temp::TempList(new_reg), nullptr));
-      instr_list.Append(new assem::OperInstr("jmp " + temp::LabelFactory::LabelString(label_end), nullptr, nullptr, nullptr));
-      instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_false), label_false));
-      instr_list.Append(new assem::MoveInstr("movq $1, `d0", new temp::TempList(new_reg), nullptr));
-      instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_end), label_end));
-      break;
+    // case AND_OP:
+    //   left = left_->Munch(instr_list, fs);
+    //   right = right_->Munch(instr_list, fs);
+    //   label_false = temp::LabelFactory::NewLabel();
+    //   label_end = temp::LabelFactory::NewLabel();
+    //   instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(left), nullptr));
+    //   instr_list.Append(new assem::OperInstr("je " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
+    //   instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(right), nullptr));
+    //   instr_list.Append(new assem::OperInstr("je " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
+    //   instr_list.Append(new assem::MoveInstr("movq $1, `d0", new temp::TempList(new_reg), nullptr));
+    //   instr_list.Append(new assem::OperInstr("jmp " + temp::LabelFactory::LabelString(label_end), nullptr, nullptr, nullptr));
+    //   instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_false), label_false));
+    //   instr_list.Append(new assem::MoveInstr("movq $0, `d0", new temp::TempList(new_reg), nullptr));
+    //   instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_end), label_end));
+    //   break;
+    // case OR_OP:
+    //   left = left_->Munch(instr_list, fs);
+    //   right = right_->Munch(instr_list, fs);
+    //   label_false = temp::LabelFactory::NewLabel();
+    //   label_end = temp::LabelFactory::NewLabel();
+    //   instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(left), nullptr));
+    //   instr_list.Append(new assem::OperInstr("jne " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
+    //   instr_list.Append(new assem::OperInstr("cmpq $0, `s0", nullptr, new temp::TempList(right), nullptr));
+    //   instr_list.Append(new assem::OperInstr("jne " + temp::LabelFactory::LabelString(label_false), nullptr, nullptr, nullptr));
+    //   instr_list.Append(new assem::MoveInstr("movq $0, `d0", new temp::TempList(new_reg), nullptr));
+    //   instr_list.Append(new assem::OperInstr("jmp " + temp::LabelFactory::LabelString(label_end), nullptr, nullptr, nullptr));
+    //   instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_false), label_false));
+    //   instr_list.Append(new assem::MoveInstr("movq $1, `d0", new temp::TempList(new_reg), nullptr));
+    //   instr_list.Append(new assem::LabelInstr(temp::LabelFactory::LabelString(label_end), label_end));
+    //   break;
   }
   return new_reg;
 }
