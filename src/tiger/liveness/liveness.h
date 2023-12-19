@@ -6,7 +6,8 @@
 #include "tiger/frame/temp.h"
 #include "tiger/liveness/flowgraph.h"
 #include "tiger/util/graph.h"
-
+#include <map>
+#include <set>
 namespace live {
 
 using INode = graph::Node<temp::Temp>;
@@ -20,11 +21,19 @@ class MoveList {
 public:
   MoveList() = default;
 
+  MoveList(INodePtr src, INodePtr dst) {
+    move_list_.emplace_back(src, dst);
+  }
+
   [[nodiscard]] const std::list<std::pair<INodePtr, INodePtr>> &
   GetList() const {
     return move_list_;
   }
   void Append(INodePtr src, INodePtr dst) { move_list_.emplace_back(src, dst); }
+  void Fusion(INodePtr src, INodePtr dst) {
+    if (!Contain(src, dst)) Append(src, dst);
+    return;
+  }
   bool Contain(INodePtr src, INodePtr dst);
   void Delete(INodePtr src, INodePtr dst);
   void Prepend(INodePtr src, INodePtr dst) {
@@ -43,6 +52,7 @@ struct LiveGraph {
 
   LiveGraph(IGraphPtr interf_graph, MoveList *moves)
       : interf_graph(interf_graph), moves(moves) {}
+  LiveGraph() {};
 };
 
 class LiveGraphFactory {
@@ -68,6 +78,8 @@ private:
   void InterfGraph();
 };
 
+std::set<temp::Temp *> ToSet(const std::list<temp::Temp *> &origin);
+temp::TempList *ToTempList(const std::set<temp::Temp *> &origin);
 } // namespace live
 
 #endif

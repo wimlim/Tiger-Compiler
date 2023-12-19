@@ -15,9 +15,6 @@ void ProgSem::FillBaseVEnv() {
   venv_->Enter(sym::Symbol::UniqueSymbol("flush"),
                new env::FunEntry(new type::TyList(), type::VoidTy::Instance()));
 
-  venv_->Enter(sym::Symbol::UniqueSymbol("MaxFree"),
-               new env::FunEntry(new type::TyList(), type::IntTy::Instance()));
-
   formals = new type::TyList(type::IntTy::Instance());
 
   venv_->Enter(
@@ -81,10 +78,6 @@ void ProgTr::FillBaseVEnv() {
   venv_->Enter(sym::Symbol::UniqueSymbol("flush"),
                new env::FunEntry(level, label, new type::TyList(),
                                  type::VoidTy::Instance()));
-
-  venv_->Enter(sym::Symbol::UniqueSymbol("MaxFree"),
-               new env::FunEntry(level, label, new type::TyList(),
-                                 type::IntTy::Instance()));
 
   formals = new type::TyList(type::IntTy::Instance());
 
