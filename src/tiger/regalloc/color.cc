@@ -354,7 +354,7 @@ void Color::AddWorkList(live::INodePtr u) {
 }
 
 bool Color::OK(live::INodePtr t, live::INodePtr r) {
-  bool ret = degree_[t] < K || precolored_->Contain(t) || adj_set_.find(std::make_pair(t, r)) != adj_set_.end();
+  bool ret = degree_[t] < K || adj_set_.find(std::make_pair(t, r)) == adj_set_.end();
   return ret;
 }
 
