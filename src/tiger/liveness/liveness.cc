@@ -75,7 +75,6 @@ void LiveGraphFactory::LiveMap() {
         in_1.erase(iter);
       for (auto &iter : cur->Use()->GetList())
         in_1.insert(iter);
-      /* Judge whether change the original in_ TempList */
       if (in_1 != ToSet(in_->Look(node)->GetList())) {
         fixed = false;
         in_->Set(node, ToTempList(in_1));
@@ -85,7 +84,6 @@ void LiveGraphFactory::LiveMap() {
       for (auto &iter : node->Succ()->GetList())
         for (auto &iterator : in_->Look(iter)->GetList())
           out_1.insert(iterator);
-      /* Judge whether change the original out_ TempList */
       if (out_1 != ToSet(out_->Look(node)->GetList())) {
         fixed = false;
         out_->Set(node, ToTempList(out_1));
