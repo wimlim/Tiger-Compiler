@@ -143,17 +143,6 @@ void LiveGraphFactory::InterfGraph() {
           live_graph_.moves->Fusion(temp_node_map_->Look(use), temp_node_map_->Look(def));
         }
       }
-    } else {
-      for (auto &def : defs) {
-        for (auto &outTemp : outs) {
-          if (def != outTemp) {
-            auto defNode = temp_node_map_->Look(def);
-            auto outNode = temp_node_map_->Look(outTemp);
-            live_graph_.interf_graph->AddEdge(defNode, outNode);
-            live_graph_.interf_graph->AddEdge(outNode, defNode);
-          }
-        }
-      }
     }
   }
 
